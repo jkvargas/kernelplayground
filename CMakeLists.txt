@@ -1,46 +1,52 @@
 cmake_minimum_required(VERSION 3.22)
 project(kprobes C)
 
-set(CMAKE_C_STANDARD 90)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+find_package(KernelHeaders REQUIRED)
+include_directories(${KERNEL_HEADERS_INCLUDE_DIRS})
 
-# Module info
-add_definitions(-D__KERNEL__ -DMODULE)
+# Module file name
+set(MODULE_FILE "${PROJECT_NAME}.ko")
+set(KBUILD_FILE "obj-m := ${PROJECT_NAME}.o")
 
-# Find the kernel release
-execute_process(
-        COMMAND uname -r
-        OUTPUT_VARIABLE KERNEL_RELEASE
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-)
+# Moodule build command
+set(KBUILD_CMD make -C ${KERNEL_HEADERS_DIR} modules M=${CMAKE_CURRENT_BINARY_DIR} src=${CMAKE_CURRENT_SOURCE_DIR})
 
-# Find the headers
-find_path(
-        KERNEL_HEADERS_DIR
-        include/linux/user.h
-        PATHS /lib/modules/${KERNEL_RELEASE}/build
-)
+# Get a list of all source files
+file(GLOB_RECURSE sources_absolute ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
+foreach(file ${sources_absolute})
+  # Extract file components
+  file(RELATIVE_PATH file "${CMAKE_CURRENT_SOURCE_DIR}" "${file}")
+  get_filename_component(file_dir "${file}" DIRECTORY)
+  get_filename_component(file_name_we "${file}" NAME_WE)
+  
+  # Create the build directory structure
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${file_dir})
 
-message(STATUS "Kernel release: ${KERNEL_RELEASE}")
-message(STATUS "Kernel headers: ${KERNEL_HEADERS_DIR}")
+  # Append the file to Kbuild
+  set(KBUILD_FILE "${KBUILD_FILE}\n${PROJECT_NAME}-y += ${file_dir}/${file_name_we}.o")
 
-# Add header files
-include_directories(
-        ${KERNEL_HEADERS_DIR}/include
-        ${KERNEL_HEADERS_DIR}/arch/x86/include
-        ${KERNEL_HEADERS_DIR}/arch/x86/include/generated
-)
+  # Append to relative sources list
+  list(APPEND sources_relative "${file_dir}/${file_name_we}.c")
+endforeach()
 
-set(DRIVER_FILE hello.ko)
-set(KBUILD_CMD $(MAKE) -C ${KERNEL_HEADERS_DIR} modules M=${CMAKE_CURRENT_BINARY_DIR} src=${CMAKE_CURRENT_SOURCE_DIR})
+# Append build flags to Kbuild
+set(KBUILD_FILE "${KBUILD_FILE}\nccflags-y := -DMODULE_NAME=\\\"${PROJECT_NAME}\\\"")
 
-# Generate the Kbuild file through cmake.
-FILE(WRITE ${CMAKE_CURRENT_SOURCE_DIR}/Kbuild "obj-m := hello.o")
+# Strip trailing whitespaces from ${sources_relative}
+string(REGEX REPLACE "\n$" "" ${sources_relative} "${sources_relative}")
 
-add_custom_command(OUTPUT ${DRIVER_FILE}
-        COMMAND ${KBUILD_CMD}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        DEPENDS hello.c VERBATIM)
+# Write the Kbuild file
+file(WRITE ${CMAKE_CURRENT_SOURCE_DIR}/Kbuild ${KBUILD_FILE})
 
-add_custom_target(driver ALL DEPENDS ${DRIVER_FILE})
-# Parse c files
-add_library(dummy_target hello.c)
+# Make sure there's a Makefile since the kernel build system
+# behaves badly when Kbuild is there, but Makefile isn't
+file(TOUCH ${CMAKE_CURRENT_BINARY_DIR}/Makefile)
+
+# Create a custom command for running the module build
+add_custom_command(OUTPUT ${MODULE_FILE}
+  COMMAND ${KBUILD_CMD}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  DEPENDS ${sources_relative} VERBATIM)
+
+add_custom_target(${PROJECT_NAME} ALL DEPENDS ${MODULE_FILE})
