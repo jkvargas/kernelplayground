@@ -2,3 +2,5 @@ build/
 cmake-build-debug/
 Kbuild
 .idea
+compile_commands.json
+.cache
